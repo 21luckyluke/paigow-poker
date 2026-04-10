@@ -49,15 +49,47 @@ function evalFiveHand(cards) {
 }
 
 function tryJokerFive(cards) {
+  // Pai Gow Poker semi-wild joker rules:
+  // Joker can ONLY be used as:
+  //   1. An Ace (for pairs, trips of Aces, full house with Aces, etc.)
+  //   2. To complete a straight
+  //   3. To complete a flush
+  //   4. To complete a straight flush / royal flush
+  // It CANNOT substitute for non-Ace ranks to make trips, quads, etc.
   const others = cards.filter(c => !c.isJoker);
   let best = { rank: -1, name: '', tiebreak: [] };
+
+  // Try joker as Ace in every suit
   for (const suit of SUITS) {
+    const test = [...others, { rank: 'A', suit, isJoker: false }];
+    const r = evalFiveNoJoker(test);
+    if (compareFive(r, best) > 0) best = r;
+  }
+
+  // Try joker to complete a flush (use the majority suit)
+  const suitCounts = {};
+  others.forEach(c => { suitCounts[c.suit] = (suitCounts[c.suit] || 0) + 1; });
+  const flushSuit = Object.entries(suitCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (flushSuit) {
     for (const rank of RANKS) {
-      const test = [...others, { rank, suit, isJoker: false }];
+      const test = [...others, { rank, suit: flushSuit, isJoker: false }];
       const r = evalFiveNoJoker(test);
       if (compareFive(r, best) > 0) best = r;
     }
   }
+
+  // Try joker to complete a straight (try all ranks in all suits)
+  for (const suit of SUITS) {
+    for (const rank of RANKS) {
+      const test = [...others, { rank, suit, isJoker: false }];
+      const rv = test.map(c => RANK_VAL[c.rank]).sort((a, b) => b - a);
+      if (checkStraight(rv)) {
+        const r = evalFiveNoJoker(test);
+        if (compareFive(r, best) > 0) best = r;
+      }
+    }
+  }
+
   return best;
 }
 
@@ -514,7 +546,7 @@ function getBonusPayout(sevenResult, bp) {
 }
 
 // ─── GAME STATE FACTORY ──────────────────────────────────────────────────────
-function makeGame(hostId, hostName, startingChips, bonusPayouts, poolContribution) {
+function makeGame(hostId, hostName, startingChips, bonusPayouts, poolContribution, minBet, maxBet, fixedBuyIn) {
   return {
     hostId,
     phase: 'lobby',   // lobby | bet | set | reveal | done
@@ -525,6 +557,9 @@ function makeGame(hostId, hostName, startingChips, bonusPayouts, poolContributio
     bonusPayouts,
     poolContribution: poolContribution || 0,
     bonusPool: 0,
+    minBet: minBet || 0,
+    maxBet: Math.min(maxBet || 5, 5),
+    fixedBuyIn: fixedBuyIn || false,
     houseBonus: { collected: 0, paid: 0, rounds: 0 },
     sessionBestHand: null,
     revealStep: -1,
@@ -564,9 +599,13 @@ function safeState(room, forSocketId) {
     houseBonus: g.houseBonus,
     bankerAceHighPush: g.bankerAceHighPush || false,
     bankerId: g.players[g.bankerIdx] ? g.players[g.bankerIdx].id : null,
+    hostId: g.hostId,
     bonusPool: g.bonusPool || 0,
     poolContribution: g.poolContribution || 0,
     bankerInsolvent: g.bankerInsolvent || false,
+    minBet: g.minBet || 0,
+    maxBet: g.maxBet || 5,
+    fixedBuyIn: g.fixedBuyIn || false,
     dealOrderNum: g.dealOrderNum || null,
     players: g.players.map(p => {
       const isMe = p.id === forSocketId;
@@ -590,10 +629,11 @@ function safeState(room, forSocketId) {
         seatIndex: p.seatIndex !== undefined ? p.seatIndex : null,
         disconnected: p.disconnected || false,
         stats: p.stats,
-        // Banker cards always fully visible to all; player cards visible to owner + after reveal
+        // Banker cards always visible; player cards visible to owner + after reveal
+        // During set phase: once banker has set, reveal their high/low arrangement to all
         hand: (isMe || isBanker || p.revealed) ? p.hand : (p.hand.length > 0 ? p.hand.map(() => ({ hidden: true })) : []),
-        highHand: (isMe || isBanker || p.revealed) ? p.highHand : (p.highHand.length > 0 ? p.highHand.map(() => ({ hidden: true })) : []),
-        lowHand: (isMe || isBanker || p.revealed) ? p.lowHand : (p.lowHand.length > 0 ? p.lowHand.map(() => ({ hidden: true })) : []),
+        highHand: (isMe || isBanker || p.revealed || (isBanker && g.players[g.bankerIdx].handSet)) ? p.highHand : (p.highHand.length > 0 ? p.highHand.map(() => ({ hidden: true })) : []),
+        lowHand: (isMe || isBanker || p.revealed || (isBanker && g.players[g.bankerIdx].handSet)) ? p.lowHand : (p.lowHand.length > 0 ? p.lowHand.map(() => ({ hidden: true })) : []),
       };
     }),
     sessionBestHand: g.sessionBestHand,
@@ -763,10 +803,10 @@ function ensurePoolCovers(g, amount) {
 io.on('connection', (socket) => {
 
   // Create room
-  socket.on('createRoom', ({ name, startingChips, bonusPayouts, poolContribution }) => {
+  socket.on('createRoom', ({ name, startingChips, bonusPayouts, poolContribution, minBet, maxBet, fixedBuyIn }) => {
     let code;
     do { code = makeCode(); } while (rooms[code]);
-    rooms[code] = makeGame(socket.id, name, startingChips, bonusPayouts, Math.max(0, parseInt(poolContribution)||0));
+    rooms[code] = makeGame(socket.id, name, startingChips, bonusPayouts, Math.max(0, parseFloat(poolContribution)||0), parseFloat(minBet)||0, parseFloat(maxBet)||5, !!fixedBuyIn);
     socket.join(code);
     socket.emit('roomCreated', { code });
     broadcastState(code);
@@ -821,7 +861,7 @@ io.on('connection', (socket) => {
     // Late joiner: mark as sitting out this round
     const sittingOut = g.phase !== 'lobby' && g.phase !== 'bet';
     // Charge pool contribution for late joiners if game already started
-    let newChips = g.startingChips;
+    let newChips = g.fixedBuyIn ? g.startingChips : g.startingChips;
     let poolBlocked = false;
     if (g.phase !== 'lobby' && g.poolContribution > 0) {
       if (newChips >= g.poolContribution) {
@@ -891,7 +931,7 @@ io.on('connection', (socket) => {
     if (!p || p.folded || p.poolBlocked) return;
     const idx = g.players.indexOf(p);
     if (idx === g.bankerIdx) return;
-    const MAX_MAIN_BET = 3;
+    const MAX_MAIN_BET = g.maxBet || 5;
     const available = Math.min(p.chips - p.bonusBet, MAX_MAIN_BET - p.bet);
     const add = Math.min(amount, available);
     if (add <= 0.001) return;
@@ -961,6 +1001,14 @@ io.on('connection', (socket) => {
     g.deck = shuffle(buildDeck());
     // Roll deal order number 1-7 (1=banker, 2=right of banker, clockwise)
     g.dealOrderNum = Math.floor(Math.random() * 7) + 1;
+    // Auto-fold anyone below minBet (0 bet = sitting out; below minBet = must fold)
+    if (g.minBet > 0) {
+      g.players.forEach((p, i) => {
+        if (i !== g.bankerIdx && p.bet > 0 && p.bet < g.minBet) {
+          p.bet = 0; p.folded = true;
+        }
+      });
+    }
     g.players.forEach(p => {
       p.hand = []; p.highHand = []; p.lowHand = [];
       p.handSet = false; p.result = null;

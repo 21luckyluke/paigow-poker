@@ -95,7 +95,7 @@ header{background:linear-gradient(180deg,#0d0d0d,#1a1208);border-bottom:2px soli
 .phase-done{background:rgba(192,57,43,.2);border:1px solid #c0392b;color:#f08080}
 .phase-lobby{background:rgba(128,128,128,.2);border:1px solid #888;color:#bbb}
 .header-right{display:flex;gap:6px;margin-left:auto}
-.table-wrap{flex:1;overflow:auto;position:relative;padding:4px;scroll-behavior:smooth}
+.table-wrap{flex:1;overflow:auto;position:relative;padding:4px;scroll-behavior:smooth;min-height:0}
 .casino-table{position:absolute;inset:4px;background:radial-gradient(ellipse at 50% 38%,#2a7a48 0%,#1e6038 25%,#145028 55%,#0a2a18 80%,#061508 100%);border-radius:50%/42%;border:8px solid #1a0e04;box-shadow:0 0 0 3px #2a1a08,0 0 0 5px #0f0a04,inset 0 0 60px rgba(0,0,0,.5),0 8px 40px rgba(0,0,0,.9);overflow:visible;min-height:320px}
 .casino-table::before{content:'';position:absolute;inset:8px;border:2px solid rgba(201,168,76,.12);border-radius:50%/42%;pointer-events:none;z-index:0}
 .felt-watermark{position:absolute;top:44%;left:50%;transform:translate(-50%,-50%);font-family:'Cinzel Decorative',serif;font-size:clamp(10px,1.6vw,18px);color:rgba(201,168,76,.055);letter-spacing:5px;text-transform:uppercase;pointer-events:none;white-space:nowrap;z-index:0}
@@ -110,9 +110,9 @@ header{background:linear-gradient(180deg,#0d0d0d,#1a1208);border-bottom:2px soli
 .deal-puck-num{font-family:'Cinzel Decorative',serif;font-size:16px;font-weight:700;color:#1a0800;line-height:1}
 .deal-puck-lbl{font-family:'Cinzel',serif;font-size:6px;letter-spacing:1px;text-transform:uppercase;color:rgba(26,8,0,.6)}
 .spot-anchor{position:absolute;z-index:5}
-.table-spot{background:rgba(5,18,10,.88);border:1px solid rgba(201,168,76,.18);border-radius:7px;padding:5px 6px;width:170px;box-shadow:0 4px 14px rgba(0,0,0,.7);transition:border-color .3s,box-shadow .3s}
+.table-spot{background:rgba(5,18,10,.88);border:1px solid rgba(201,168,76,.18);border-radius:7px;padding:5px 6px;width:clamp(150px,18vw,200px);box-shadow:0 4px 14px rgba(0,0,0,.7);transition:border-color .3s,box-shadow .3s}
 .table-spot.is-me{border-color:rgba(41,128,185,.55);background:rgba(8,22,50,.88)}
-.table-spot.is-banker{border-color:rgba(201,168,76,.5);background:rgba(20,12,2,.9);width:190px;box-shadow:0 0 16px rgba(201,168,76,.18),0 4px 14px rgba(0,0,0,.7)}
+.table-spot.is-banker{border-color:rgba(201,168,76,.5);background:rgba(20,12,2,.9);width:clamp(170px,20vw,220px);box-shadow:0 0 16px rgba(201,168,76,.18),0 4px 14px rgba(0,0,0,.7)}
 .table-spot.folded{opacity:.45}
 .table-spot.ghost{background:rgba(5,18,10,.3);border:1px dashed rgba(201,168,76,.1);box-shadow:none;width:110px}
 .table-spot.dc{opacity:.4;border-style:dashed}
@@ -363,6 +363,28 @@ header{background:linear-gradient(180deg,#0d0d0d,#1a1208);border-bottom:2px soli
           <input type="number" id="pool-custom" placeholder="Or enter amount…" min="0" step="0.25" oninput="selectPoolCustom(this.value)">
         </div>
       </div>
+      <div class="form-group"><label>Min Bet per Hand</label>
+        <div class="chip-presets" id="minbet-presets">
+          <div class="chip-preset active" onclick="selectMinBet(this,0)">None</div>
+          <div class="chip-preset" onclick="selectMinBet(this,0.25)">$0.25</div>
+          <div class="chip-preset" onclick="selectMinBet(this,0.50)">$0.50</div>
+          <div class="chip-preset" onclick="selectMinBet(this,1)">$1</div>
+        </div>
+      </div>
+      <div class="form-group"><label>Max Bet per Hand</label>
+        <div class="chip-presets" id="maxbet-presets">
+          <div class="chip-preset" onclick="selectMaxBet(this,1)">$1</div>
+          <div class="chip-preset" onclick="selectMaxBet(this,2)">$2</div>
+          <div class="chip-preset" onclick="selectMaxBet(this,3)">$3</div>
+          <div class="chip-preset active" onclick="selectMaxBet(this,5)">$5</div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+          <input type="checkbox" id="fixed-buyin-check" onchange="toggleFixedBuyIn(this)" style="width:auto;accent-color:var(--gold)">
+          Fixed Buy-In (all players use starting chip amount)
+        </label>
+      </div>
       <div style="display:flex;gap:10px;justify-content:center"><button class="btn btn-primary btn-lg" onclick="hostGame()">Create Room</button></div>
     </div>
     <div id="join-tab" class="tab-content">
@@ -493,7 +515,7 @@ header{background:linear-gradient(180deg,#0d0d0d,#1a1208);border-bottom:2px soli
 // STATE
 // ═══════════════════════════════════════════
 const socket = io();
-let myId = socket.id, roomCode = null, gameState = null, startingChips = 20, poolContribution = 0;
+let myId = socket.id, roomCode = null, gameState = null, startingChips = 20, poolContribution = 0, minBet = 0, maxBet = 5, fixedBuyIn = false;
 let tempHigh = [], tempLow = [], pendingJoinName = null;
 
 // FIX 1: banker check is purely socket-id vs bankerId from server
@@ -705,6 +727,19 @@ function selectPoolCustom(v) {
     document.querySelectorAll('#pool-presets .chip-preset').forEach(e => e.classList.remove('active'));
   }
 }
+function selectMinBet(el, v) {
+  minBet = v;
+  document.querySelectorAll('#minbet-presets .chip-preset').forEach(e => e.classList.remove('active'));
+  if (el) el.classList.add('active');
+}
+function selectMaxBet(el, v) {
+  maxBet = v;
+  document.querySelectorAll('#maxbet-presets .chip-preset').forEach(e => e.classList.remove('active'));
+  if (el) el.classList.add('active');
+}
+function toggleFixedBuyIn(cb) {
+  fixedBuyIn = cb.checked;
+}
 function getBP() {
   const g = id => parseInt(document.getElementById(id).value) || 0;
   return { threepair:g('bp-threepair')||2, trips:g('bp-trips')||3, straight:g('bp-straight')||10,
@@ -715,7 +750,7 @@ function getBP() {
 function hostGame() {
   const name = document.getElementById('host-name').value.trim();
   if (!name) { toast('Enter your name'); return; }
-  socket.emit('createRoom', { name, startingChips, bonusPayouts: getBP(), poolContribution });
+  socket.emit('createRoom', { name, startingChips, bonusPayouts: getBP(), poolContribution, minBet, maxBet, fixedBuyIn });
 }
 function lookupSeats() {
   const name = document.getElementById('join-name').value.trim();
@@ -737,13 +772,15 @@ function showWaitingRoom(host) {
   showScreen('lobby-screen');
 }
 function renderWaiting(state) {
+  const isHost = state.hostId === myId;
   const poolLine = state.poolContribution > 0
-    ? `<div style="font-family:'Cinzel',serif;font-size:10px;color:rgba(201,168,76,.5);text-align:center;margin-bottom:10px">🎱 Bonus pool contribution: <strong style="color:var(--gold)">${state.poolContribution}</strong> chips per player at game start</div>`
+    ? `<div style="font-family:'Cinzel',serif;font-size:10px;color:rgba(201,168,76,.5);text-align:center;margin-bottom:10px">🎱 Bonus pool contribution: <strong style="color:var(--gold)">${state.poolContribution}</strong> per player at game start</div>`
     : '';
   document.getElementById('waiting-players').innerHTML = poolLine + state.players.map(p => `
     <div class="waiting-player">
       <span class="waiting-player-name">${esc(p.name)}</span>
-      ${p.id===state.players[0].id?'<span class="host-badge">HOST</span>':''}
+      ${isHost ? `<span class="chips-disp" style="margin-left:auto;font-size:11px">$<span class="amt">${p.chips}</span></span>` : ''}
+      ${p.id===state.hostId?'<span class="host-badge">HOST</span>':''}
       ${p.id===myId?'<span class="me-badge">YOU</span>':''}
     </div>`).join('');
 }
@@ -837,15 +874,16 @@ function renderArcSpots(state) {
   const arcPos = getArcPositions();
   const phase = state.phase;
   const showMeCenter = (phase === 'bet' || phase === 'set');
-  const spotW = 170;
-  let html = '';
+  const spotW = Math.min(200, Math.max(150, tw * 0.18));
+  const spotH = 120; // approximate height for overlap detection
 
+  // Build slot data first so we can do overlap resolution
+  const slots = [];
   for (let slot = 0; slot < 6; slot++) {
     const pos = arcPos[slot];
     const p   = state.players.find(p => p.seatIndex===slot && !p.disconnected);
     const dcP = state.players.find(p => p.seatIndex===slot && p.disconnected);
     const isMySlot = p && p.id === myId;
-    // FIX 1: skip the banker in the arc — they render in the dealer rail only
     if (p && state.players.indexOf(p) === state.bankerIdx) continue;
 
     let px, py, ox, oy;
@@ -856,8 +894,35 @@ function renderArcSpots(state) {
       ox = pos.x < 0.36 ? -spotW : pos.x > 0.64 ? 0 : -spotW/2;
       oy = -36;
     }
-    const style = `position:absolute;left:${px}px;top:${py}px;transform:translate(${ox}px,${oy}px)`;
+    // Final top-left corner position
+    let fx = px + ox, fy = py + oy;
+    slots.push({ slot, p, dcP, fx, fy, isMySlot });
+  }
 
+  // Simple overlap resolution: push apart horizontally if boxes overlap
+  const PAD = 4;
+  for (let i = 0; i < slots.length; i++) {
+    for (let j = i + 1; j < slots.length; j++) {
+      const a = slots[i], b = slots[j];
+      const overlapX = a.fx < b.fx + spotW + PAD && a.fx + spotW + PAD > b.fx;
+      const overlapY = a.fy < b.fy + spotH + PAD && a.fy + spotH + PAD > b.fy;
+      if (overlapX && overlapY) {
+        // Push the one further right to the right edge of the other
+        if (a.fx < b.fx) {
+          b.fx = a.fx + spotW + PAD;
+        } else {
+          a.fx = b.fx + spotW + PAD;
+        }
+        // Also clamp to table bounds
+        a.fx = Math.max(0, Math.min(a.fx, tw - spotW));
+        b.fx = Math.max(0, Math.min(b.fx, tw - spotW));
+      }
+    }
+  }
+
+  let html = '';
+  for (const { slot, p, dcP, fx, fy } of slots) {
+    const style = `position:absolute;left:${fx}px;top:${fy}px`;
     if (p) {
       const idx = state.players.indexOf(p);
       html += `<div class="spot-anchor" style="${style}">${renderSpotHTML(p, idx, state)}</div>`;
@@ -936,7 +1001,7 @@ function renderSpotBody(p, idx, state, isMe, isBanker) {
 
   if (state.phase === 'bet') {
     if (isBanker) return '<div class="not-playing">Covering all bets</div>';
-    if (p.folded && !p.poolBlocked) return '<div class="not-playing">Folded</div>';
+    if (p.folded && !p.poolBlocked && !p.lateJoiner) return '<div class="not-playing">Sitting out</div>';
     if (p.poolBlocked) {
       const need = state.poolContribution - p.chips;
       return `<div class="pool-blocked-msg">🎱 Need ${need > 0 ? need : state.poolContribution} more chips to join pool<br>Buy in to play this round</div>`;
@@ -1018,7 +1083,6 @@ function cHTML(card, sf, x='') {
 }
 function fmtChip(n){if(n==null)return'$0';if(n<1&&n>0)return`¢${Math.round(n*100)}`;return`$${Number.isInteger(n)?n:n.toFixed(2)}`; }
 
-const MAIN_BET_CAP  = 3;
 const BONUS_BET_CAP = 0.25;
 const CHIP_DENOMS   = [0.25, 1, 5, 25];
 const CHIP_CLASSES  = {0.25:'chip-025', 1:'chip-1', 5:'chip-5', 25:'chip-25'};
@@ -1031,19 +1095,20 @@ function chipBtn(denom, fn, remaining) {
 }
 
 function renderBetUI(p) {
-  const mainRemain  = Math.max(0, Math.min(MAIN_BET_CAP  - p.bet,  p.chips - p.bonusBet));
+  const cap = (gameState && gameState.maxBet) || 5;
+  const mainRemain  = Math.max(0, Math.min(cap - p.bet, p.chips - p.bonusBet));
   const bonusRemain = Math.max(0, Math.min(BONUS_BET_CAP - p.bonusBet, p.chips - p.bet));
   const mainChips   = CHIP_DENOMS.map(d => chipBtn(d, 'placeBet',      mainRemain)).join('');
   const bonusChips  = CHIP_DENOMS.map(d => chipBtn(d, 'placeBonusBet', bonusRemain)).join('');
   const betLbl = p.bet > 0 ? `$${p.bet.toFixed(2).replace(/\.00$/,'')}` : '$0';
   const bonLbl = p.bonusBet > 0 ? `$${p.bonusBet.toFixed(2).replace(/\.00$/,'')}` : '$0';
+  const minLbl = (gameState && gameState.minBet > 0) ? `<span style="opacity:.45;font-size:7px"> min $${gameState.minBet}</span>` : '';
   return `<div class="bet-ui">
-    <div class="bet-section-lbl">Main Bet <span style="opacity:.45;font-size:7px">(max $${MAIN_BET_CAP})</span></div>
+    <div class="bet-section-lbl">Main Bet${minLbl} <span style="opacity:.45;font-size:7px">(max $${cap})</span></div>
     <div class="bet-row">
       <div class="bet-lbl"><span class="val">${betLbl}</span></div>
       <div class="chip-stack">${mainChips}</div>
       ${p.bet>0?`<button class="clear-btn" onclick="clearBet()">✕</button>`:''}
-      <button class="btn btn-sm" style="font-size:8px;padding:2px 6px" onclick="doFold()">${p.folded?'Unfold':'Fold'}</button>
     </div>
     <div class="bet-section-lbl" style="color:#c080f0">Bonus Bet 🎰 <span style="opacity:.45;font-size:7px">(max $${BONUS_BET_CAP})</span></div>
     <div class="bonus-row" style="border:none;padding:0;background:none">
@@ -1051,6 +1116,7 @@ function renderBetUI(p) {
       <div class="chip-stack">${bonusChips}</div>
       ${p.bonusBet>0?`<button class="clear-btn" onclick="clearBonusBet()">✕</button>`:''}
     </div>
+    <div style="font-family:'Cinzel',serif;font-size:8px;color:rgba(245,237,216,.3);margin-top:3px">$0 bet = sitting out this hand</div>
   </div>`;
 }
 
@@ -1142,14 +1208,30 @@ function renderBankerStrip(state) {
   const banker = getBanker();
   if (!banker||!banker.hand||!banker.hand.length) { strip.style.display='none'; return; }
   strip.style.display = '';
-  const cardHTML = banker.hand.map(c => {
-    if (c.hidden) return '<div class="card back"></div>';
+  function crd(c) {
+    if (!c||c.hidden) return '<div class="card back"></div>';
     if (c.isJoker) return '<div class="card joker"><div class="card-rank">★</div><div class="card-suit" style="font-size:4px">JKR</div></div>';
     const col=(c.suit==='♥'||c.suit==='♦')?'red':'black';
     return `<div class="card ${col}"><div class="card-rank">${c.rank}</div><div class="card-suit">${c.suit}</div></div>`;
-  }).join('');
-  strip.innerHTML = `<div class="banker-strip-lbl">Banker's Cards — ${esc(banker.name)}</div>
-    <div class="banker-strip-cards">${cardHTML}</div>`;
+  }
+  if (banker.handSet && banker.highHand && banker.highHand.length === 5) {
+    // Show banker's arranged split
+    strip.innerHTML = `<div class="banker-strip-lbl">🎩 Banker set — ${esc(banker.name)}</div>
+      <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;justify-content:center;margin-top:4px">
+        <div>
+          <div style="font-family:'Cinzel',serif;font-size:7px;color:rgba(245,237,216,.35);text-align:center;margin-bottom:2px">HIGH HAND</div>
+          <div class="banker-strip-cards">${banker.highHand.map(crd).join('')}</div>
+        </div>
+        <div>
+          <div style="font-family:'Cinzel',serif;font-size:7px;color:rgba(245,237,216,.35);text-align:center;margin-bottom:2px">LOW HAND</div>
+          <div class="banker-strip-cards">${banker.lowHand.map(crd).join('')}</div>
+        </div>
+      </div>`;
+  } else {
+    // Banker not yet set — show 7 cards face up
+    strip.innerHTML = `<div class="banker-strip-lbl">Banker's Cards — ${esc(banker.name)}</div>
+      <div class="banker-strip-cards">${banker.hand.map(crd).join('')}</div>`;
+  }
 }
 
 // FIX 3: lock confirm button for non-bankers until banker has set
@@ -1204,7 +1286,7 @@ function placeBet(a)      {socket.emit('placeBet',      {code:roomCode,amount:a}
 function clearBet()       {socket.emit('clearBet',      {code:roomCode});}
 function placeBonusBet(a) {socket.emit('placeBonusBet', {code:roomCode,amount:a});}
 function clearBonusBet()  {socket.emit('clearBonusBet', {code:roomCode});}
-function doFold(){const me=gameState&&gameState.players.find(p=>p.id===myId);socket.emit(me&&me.folded?'unfold':'fold',{code:roomCode});}
+// fold removed — $0 bet means sitting out
 
 // ═══════════════════════════════════════════
 // BUY-IN
