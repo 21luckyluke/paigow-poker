@@ -265,6 +265,7 @@ header{background:linear-gradient(180deg,#0d0d0d,#1a1208);border-bottom:2px soli
 #chat-drawer{position:fixed;bottom:0;left:0;z-index:90;display:flex;flex-direction:column;
   width:min(320px,92vw);transition:transform .3s cubic-bezier(.22,.61,.36,1)}
 #chat-drawer.collapsed{transform:translateY(calc(100% - 44px))}
+#chat-drawer.hidden{display:none!important}
 #chat-toggle{height:44px;background:linear-gradient(180deg,#0d1a0f,#060e06);
   border-top:2px solid var(--gold-d);border-right:2px solid var(--gold-d);
   border-radius:0 12px 0 0;padding:0 14px;display:flex;align-items:center;gap:8px;
@@ -304,6 +305,7 @@ header{background:linear-gradient(180deg,#0d0d0d,#1a1208);border-bottom:2px soli
   #chat-toggle{border-radius:0;border-left:none}
   #chat-body{height:220px}
   #chat-drawer.collapsed{transform:translateY(calc(100% - 40px))}
+  #chat-drawer.hidden{display:none!important}
 }
 /* REVEAL OVERLAY */
 #reveal-overlay{position:fixed;inset:0;z-index:200;background:rgba(3,8,4,.92);display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:20px}
@@ -638,7 +640,7 @@ header{background:linear-gradient(180deg,#0d0d0d,#1a1208);border-bottom:2px soli
 <div id="toast"></div>
 
 <!-- CHAT DRAWER -->
-<div id="chat-drawer" class="collapsed">
+<div id="chat-drawer" class="collapsed hidden">
   <div id="chat-toggle" onclick="toggleChat()">
     <span style="font-size:16px">💬</span>
     <span class="chat-toggle-lbl">Chat</span>
@@ -788,7 +790,9 @@ socket.on('joinedRoom', ({ code }) => {
 });
 
 socket.on('seatList', ({ takenSeats, phase }) => {
-  renderSeatPicker(takenSeats, phase); showScreen('seat-screen');
+  showScreen('seat-screen');
+  // Show screen first so offsetWidth is valid, then render seat buttons
+  setTimeout(() => renderSeatPicker(takenSeats, phase), 20);
 });
 
 socket.on('error', msg => toast(msg));
@@ -1058,8 +1062,8 @@ function renderWaiting(state) {
 // ═══════════════════════════════════════════
 function getSeatPickerPositions() {
   return Array.from({length:6}, (_,i) => {
-    const deg = 205 + (i/5)*130, rad = deg*Math.PI/180;
-    return { x: 0.5 + 0.42*Math.cos(rad), y: 0.5 + 0.38*Math.sin(rad) };
+    const deg = 50 + (i/5)*80, rad = deg*Math.PI/180;
+    return { x: 0.5 + 0.42*Math.cos(rad), y: 0.5 + 0.36*Math.sin(rad) };
   });
 }
 function renderSeatPicker(takenSeats, phase) {
@@ -1090,9 +1094,11 @@ function renderSeatPicker(takenSeats, phase) {
 // TABLE GEOMETRY
 // ═══════════════════════════════════════════
 function getArcPositions() {
+  // Players span the lower half of the oval (50°–130°), mirroring the banker at the top.
+  // 90° = straight down (6 o'clock in screen coords where y increases downward).
   return Array.from({length:6}, (_,i) => {
-    const deg = 210 + (i/5)*120, rad = deg*Math.PI/180;
-    return { x: 0.5 + 0.36*Math.cos(rad), y: 0.5 + 0.34*Math.sin(rad) };
+    const deg = 50 + (i/5)*80, rad = deg*Math.PI/180;
+    return { x: 0.5 + 0.40*Math.cos(rad), y: 0.5 + 0.34*Math.sin(rad) };
   });
 }
 
@@ -1238,7 +1244,7 @@ function renderArcSpots(state) {
       px = tw*0.5; py = th*0.88; ox = -(spotW+20)/2; oy = -36;
     } else {
       px = tw*pos.x; py = th*pos.y;
-      ox = pos.x < 0.36 ? -spotW : pos.x > 0.64 ? 0 : -spotW/2;
+      ox = pos.x > 0.60 ? -spotW : pos.x < 0.40 ? 0 : -spotW/2;
       oy = -36;
     }
     // Final top-left corner position
@@ -1979,7 +1985,23 @@ function evalTwoClient(cards){
 // ═══════════════════════════════════════════
 // UTILS
 // ═══════════════════════════════════════════
-function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');}
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  // Chat only available during active game — hide on lobby/seat screens
+  const chat = document.getElementById('chat-drawer');
+  if (chat) {
+    const gameScreens = ['game-screen', 'setter-screen'];
+    if (gameScreens.includes(id)) {
+      chat.classList.remove('hidden');
+    } else {
+      chat.classList.add('hidden');
+      // Collapse it so it's ready when game starts
+      chat.classList.add('collapsed');
+      chatOpen = false;
+    }
+  }
+}
 function toast(msg,dur=2800){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),dur);}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 document.getElementById('join-code').addEventListener('input',function(){this.value=this.value.toUpperCase();});
