@@ -800,6 +800,10 @@ function settleRound(room) {
   g.phase = 'done';
 }
 
+// ─── ROUNDING HELPER ─────────────────────────────────────────────────────────
+// Rounds to 2 decimal places — prevents float drift in chip arithmetic
+const r = n => Math.round(n * 100) / 100;
+
 // ─── RATE LIMITER (Fix #3) ───────────────────────────────────────────────────
 const betEventCounts = {}; // socketId -> { count, resetAt }
 function rateLimitBet(socketId) {
