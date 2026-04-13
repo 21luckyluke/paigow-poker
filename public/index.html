@@ -1099,11 +1099,12 @@ function renderSeatPicker(takenSeats, phase, code) {
 // TABLE GEOMETRY
 // ═══════════════════════════════════════════
 function getArcPositions() {
-  // Players span the lower half of the oval (50°–130°), mirroring the banker at the top.
-  // 90° = straight down (6 o'clock in screen coords where y increases downward).
+  // 6 player seats spread across the lower half of the oval.
+  // Using a tighter radius so spots stay well within the oval boundary.
+  // 90° = bottom center in screen coords (y increases downward).
   return Array.from({length:6}, (_,i) => {
-    const deg = 50 + (i/5)*80, rad = deg*Math.PI/180;
-    return { x: 0.5 + 0.40*Math.cos(rad), y: 0.5 + 0.34*Math.sin(rad) };
+    const deg = 55 + (i/5)*70, rad = deg*Math.PI/180;
+    return { x: 0.5 + 0.38*Math.cos(rad), y: 0.5 + 0.28*Math.sin(rad) };
   });
 }
 
@@ -1232,10 +1233,13 @@ function renderArcSpots(state) {
   const arcPos = getArcPositions();
   const phase = state.phase;
   const showMeCenter = (phase === 'bet' || phase === 'set');
-  const spotW = Math.min(200, Math.max(150, tw * 0.18));
-  const spotH = 120; // approximate height for overlap detection
 
-  // Build slot data first so we can do overlap resolution
+  // Spot width scales with table but stays reasonable
+  const spotW = Math.min(170, Math.max(110, tw * 0.15));
+  const spotH = 100;
+  const PAD   = 6;
+
+  // Build slot data
   const slots = [];
   for (let slot = 0; slot < 6; slot++) {
     const pos = arcPos[slot];
@@ -1244,43 +1248,65 @@ function renderArcSpots(state) {
     const isMySlot = p && p.id === myId;
     if (p && state.players.indexOf(p) === state.bankerIdx) continue;
 
-    let px, py, ox, oy;
+    // Anchor spot so it stays inside the oval:
+    // Spots anchor from their center point, offset upward so they sit ON the arc line
+    const cx = tw * pos.x;
+    const cy = th * pos.y;
+
+    let fx, fy;
     if (isMySlot && showMeCenter) {
-      px = tw*0.5; py = th*0.88; ox = -(spotW+20)/2; oy = -36;
+      // My spot centers at bottom of table
+      fx = tw * 0.5 - spotW / 2;
+      fy = th * 0.78 - spotH / 2;
     } else {
-      px = tw*pos.x; py = th*pos.y;
-      ox = pos.x > 0.60 ? -spotW : pos.x < 0.40 ? 0 : -spotW/2;
-      oy = -36;
+      // Horizontally center on arc point; vertically anchor top of spot to arc point
+      fx = cx - spotW / 2;
+      fy = cy - spotH * 0.2; // slight upward offset so spot sits above arc line
+      // Clamp within table bounds with margin
+      fx = Math.max(PAD, Math.min(fx, tw - spotW - PAD));
+      fy = Math.max(th * 0.45, Math.min(fy, th * 0.85 - spotH));
     }
-    // Final top-left corner position
-    let fx = px + ox, fy = py + oy;
+
     slots.push({ slot, p, dcP, fx, fy, isMySlot });
   }
 
-  // Simple overlap resolution: push apart horizontally if boxes overlap
-  const PAD = 4;
-  for (let i = 0; i < slots.length; i++) {
-    for (let j = i + 1; j < slots.length; j++) {
-      const a = slots[i], b = slots[j];
-      const overlapX = a.fx < b.fx + spotW + PAD && a.fx + spotW + PAD > b.fx;
-      const overlapY = a.fy < b.fy + spotH + PAD && a.fy + spotH + PAD > b.fy;
-      if (overlapX && overlapY) {
-        // Push the one further right to the right edge of the other
-        if (a.fx < b.fx) {
-          b.fx = a.fx + spotW + PAD;
-        } else {
-          a.fx = b.fx + spotW + PAD;
+  // Overlap resolution: if total width of all spots exceeds available space,
+  // evenly distribute them across the table width
+  const activeSlotsCount = slots.length;
+  const totalNeeded = activeSlotsCount * (spotW + PAD);
+  if (totalNeeded > tw - PAD * 2) {
+    // Not enough room — evenly space them
+    const spacing = (tw - PAD * 2) / activeSlotsCount;
+    slots.forEach((s, i) => {
+      s.fx = PAD + i * spacing + (spacing - spotW) / 2;
+      s.fx = Math.max(PAD, Math.min(s.fx, tw - spotW - PAD));
+    });
+  } else {
+    // Iterative push-apart
+    let changed = true;
+    for (let pass = 0; pass < 20 && changed; pass++) {
+      changed = false;
+      for (let i = 0; i < slots.length; i++) {
+        for (let j = i + 1; j < slots.length; j++) {
+          const a = slots[i], b = slots[j];
+          const overlapX = a.fx < b.fx + spotW + PAD && a.fx + spotW + PAD > b.fx;
+          const overlapY = a.fy < b.fy + spotH + PAD && a.fy + spotH + PAD > b.fy;
+          if (overlapX && overlapY) {
+            const mid = (a.fx + b.fx) / 2;
+            a.fx = mid - spotW / 2 - PAD / 2;
+            b.fx = mid + spotW / 2 + PAD / 2;
+            a.fx = Math.max(PAD, Math.min(a.fx, tw - spotW - PAD));
+            b.fx = Math.max(PAD, Math.min(b.fx, tw - spotW - PAD));
+            changed = true;
+          }
         }
-        // Also clamp to table bounds
-        a.fx = Math.max(0, Math.min(a.fx, tw - spotW));
-        b.fx = Math.max(0, Math.min(b.fx, tw - spotW));
       }
     }
   }
 
   let html = '';
   for (const { slot, p, dcP, fx, fy } of slots) {
-    const style = `position:absolute;left:${fx}px;top:${fy}px`;
+    const style = `position:absolute;left:${Math.round(fx)}px;top:${Math.round(fy)}px;width:${spotW}px`;
     if (p) {
       const idx = state.players.indexOf(p);
       html += `<div class="spot-anchor" style="${style}">${renderSpotHTML(p, idx, state)}</div>`;
@@ -1294,12 +1320,6 @@ function renderArcSpots(state) {
       html += `<div class="spot-anchor" style="${style}">
         <div class="table-spot ghost">
           <div style="font-family:'Cinzel',serif;font-size:7px;letter-spacing:1px;color:rgba(201,168,76,.18);text-align:center;padding:3px 0">Seat ${slot+1}</div>
-          <div class="card-zones" style="justify-content:center">
-            <div class="card-zone"><div class="card-zone-lbl">High</div>
-              <div class="card-zone-slots">${'<div class="card-slot" style="opacity:.25"></div>'.repeat(5)}</div></div>
-            <div class="card-zone"><div class="card-zone-lbl">Low</div>
-              <div class="card-zone-slots">${'<div class="card-slot bonus-slot" style="opacity:.25"></div>'.repeat(2)}</div></div>
-          </div>
         </div></div>`;
     }
   }
