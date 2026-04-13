@@ -789,10 +789,11 @@ socket.on('joinedRoom', ({ code }) => {
   else { document.getElementById('display-code').textContent = code; showWaitingRoom(false); }
 });
 
-socket.on('seatList', ({ takenSeats, phase }) => {
+socket.on('seatList', ({ takenSeats, phase, roomName }) => {
   showScreen('seat-screen');
   // Show screen first so offsetWidth is valid, then render seat buttons
-  setTimeout(() => renderSeatPicker(takenSeats, phase), 20);
+  // Pass the room code directly to avoid relying on the roomCode variable
+  setTimeout(() => renderSeatPicker(takenSeats, phase, roomName || roomCode), 20);
 });
 
 socket.on('error', msg => toast(msg));
@@ -1066,7 +1067,9 @@ function getSeatPickerPositions() {
     return { x: 0.5 + 0.42*Math.cos(rad), y: 0.5 + 0.36*Math.sin(rad) };
   });
 }
-function renderSeatPicker(takenSeats, phase) {
+function renderSeatPicker(takenSeats, phase, code) {
+  // Use passed code directly — don't rely on roomCode variable which may change
+  const roomForJoin = code || roomCode;
   const wrap = document.getElementById('seat-table-wrap');
   const w = wrap.offsetWidth||480, h = wrap.offsetHeight||340;
   wrap.querySelectorAll('.seat-btn').forEach(e => e.remove());
@@ -1078,7 +1081,9 @@ function renderSeatPicker(takenSeats, phase) {
     btn.innerHTML = `<div class="seat-btn-num">Seat ${i+1}</div>
       <div class="seat-btn-name">${taken?esc(taken.name):''}</div>
       <div class="seat-btn-status">${taken?(taken.disconnected?'away':'taken'):'open'}</div>`;
-    if (!taken) btn.onclick = () => pickSeat(i);
+    if (!taken) btn.onclick = () => {
+      socket.emit('joinRoom', { code: roomForJoin, name: pendingJoinName, seatIndex: i });
+    };
     wrap.appendChild(btn);
   });
   const db = document.createElement('div');

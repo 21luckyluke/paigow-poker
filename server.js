@@ -1311,7 +1311,12 @@ io.on('connection', (socket) => {
       io.to(code).emit('playerLeft', { name: g.players[idx].name });
       if (g.phase === 'lobby') {
         g.players.splice(idx, 1);
-        if (g.players.length === 0) { delete rooms[code]; break; }
+        if (g.players.length === 0) {
+          // Give a short grace period before deleting the room — prevents
+          // accidental deletion if the host's socket briefly reconnects
+          setTimeout(() => { if (rooms[code] && rooms[code].players.length === 0) delete rooms[code]; }, 5000);
+          break;
+        }
         if (g.hostId === socket.id) g.hostId = g.players[0].id;
       } else {
         const p = g.players[idx];
