@@ -545,6 +545,30 @@ function getBonusPayout(sevenResult, bp) {
   return null;
 }
 
+// ─── PLAYER FACTORY ──────────────────────────────────────────────────────────
+function makePlayer(id, name, chips, seatIndex, opts = {}) {
+  return {
+    id, name,
+    chips,
+    bet: 0, bonusBet: 0,
+    hand: [], highHand: [], lowHand: [],
+    handSet: false,
+    folded:      opts.folded      || false,
+    playerReady: opts.playerReady || false,
+    lateJoiner:  opts.lateJoiner  || false,
+    poolBlocked: opts.poolBlocked || false,
+    result: null, netChips: null,
+    bonusNet: null, bonusLabel: '', bonusWon: false,
+    bonusPending: 0,
+    revealed: false,
+    seatIndex,
+    disconnected: false,
+    addingChips: false,
+    stats: { wins: 0, losses: 0, pushes: 0, rounds: 0, netChips: 0, buyins: 0,
+             initialBuyIn: opts.initialBuyIn || chips }
+  };
+}
+
 // ─── GAME STATE FACTORY ──────────────────────────────────────────────────────
 function makeGame(hostId, hostName, startingChips, bonusPayouts, poolContribution, minBet, maxBet, fixedBuyIn) {
   return {
@@ -867,7 +891,6 @@ io.on('connection', (socket) => {
     let code;
     do { code = makeCode(); } while (rooms[code]);
     rooms[code] = makeGame(socket.id, name, startingChips, bonusPayouts, Math.max(0, parseFloat(poolContribution)||0), parseFloat(minBet)||0, parseFloat(maxBet)||5, !!fixedBuyIn);
-    console.log(`[createRoom] code="${code}" host="${name}" socketId=${socket.id}`);
     socket.join(code);
     socket.emit('roomCreated', { code });
     broadcastState(code);
@@ -875,7 +898,6 @@ io.on('connection', (socket) => {
 
   // Request seat list — sent before joinRoom so player can pick a seat
   socket.on('requestSeats', ({ code }) => {
-    console.log(`[requestSeats] code="${code}" roomExists=${!!rooms[code]}`);
     const g = rooms[code];
     if (!g) { socket.emit('error', 'Room not found'); return; }
     const takenSeats = g.players
@@ -886,7 +908,6 @@ io.on('connection', (socket) => {
 
   // Join room with chosen seat (allowed at any phase — late joiners sit out current round)
   socket.on('joinRoom', ({ code, name, seatIndex }) => {
-    console.log(`[joinRoom] code="${code}" name="${name}" seatIndex=${seatIndex} roomExists=${!!rooms[code]} allRooms=${Object.keys(rooms).join(',')}`);
     const g = rooms[code];
     if (!g) { socket.emit('error', 'Room not found'); return; }
 
