@@ -67,6 +67,7 @@ function tryJokerFive(cards) {
   }
 
   // Try joker to complete a flush (use the majority suit)
+  // ONLY accept the result if it is actually a flush or better
   const suitCounts = {};
   others.forEach(c => { suitCounts[c.suit] = (suitCounts[c.suit] || 0) + 1; });
   const flushSuit = Object.entries(suitCounts).sort((a, b) => b[1] - a[1])[0]?.[0];
@@ -74,19 +75,18 @@ function tryJokerFive(cards) {
     for (const rank of RANKS) {
       const test = [...others, { rank, suit: flushSuit, isJoker: false }];
       const r = evalFiveNoJoker(test);
-      if (compareFive(r, best) > 0) best = r;
+      if (r.rank >= 5 && compareFive(r, best) > 0) best = r; // rank 5 = Flush minimum
     }
   }
 
-  // Try joker to complete a straight (try all ranks in all suits)
-  for (const suit of SUITS) {
-    for (const rank of RANKS) {
-      const test = [...others, { rank, suit, isJoker: false }];
-      const rv = test.map(c => RANK_VAL[c.rank]).sort((a, b) => b - a);
-      if (checkStraight(rv)) {
-        const r = evalFiveNoJoker(test);
-        if (compareFive(r, best) > 0) best = r;
-      }
+  // Try joker to complete a straight (try all ranks in a neutral suit)
+  // ONLY accept the result if it is actually a straight or better
+  for (const rank of RANKS) {
+    const test = [...others, { rank, suit: '♠', isJoker: false }];
+    const rv = test.map(c => RANK_VAL[c.rank]).sort((a, b) => b - a);
+    if (checkStraight(rv)) {
+      const r = evalFiveNoJoker(test);
+      if (r.rank >= 4 && compareFive(r, best) > 0) best = r; // rank 4 = Straight minimum
     }
   }
 
@@ -557,6 +557,9 @@ function makeGame(hostId, hostName, startingChips, bonusPayouts, poolContributio
     bonusPayouts,
     poolContribution: poolContribution || 0,
     bonusPool: 0,
+    totalBuyIns: 0,       // sum of all chips ever brought to table
+    pendingPoolTopUp: false, // true when banker has triggered a top-up vote
+    pendingPoolTopUpAmount: 0,
     minBet: minBet || 0,
     maxBet: Math.min(maxBet || 5, 5),
     fixedBuyIn: fixedBuyIn || false,
@@ -574,6 +577,7 @@ function makeGame(hostId, hostName, startingChips, bonusPayouts, poolContributio
       lowHand: [],
       handSet: false,
       folded: false,
+      playerReady: false,
       result: null,
       netChips: null,
       bonusNet: null,
@@ -581,8 +585,23 @@ function makeGame(hostId, hostName, startingChips, bonusPayouts, poolContributio
       bonusWon: false,
       revealed: false,
       seatIndex: null,  // null = banker/dealer seat; 0-5 = arc seats
-      stats: { wins: 0, losses: 0, pushes: 0, rounds: 0, netChips: 0, buyins: 0 }
+      stats: { wins: 0, losses: 0, pushes: 0, rounds: 0, netChips: 0, buyins: 0, initialBuyIn: 0 }
     }]
+  };
+}
+
+// ─── CARD VISIBILITY HELPER ─────────────────────────────────────────────────
+function vis(arr, show) {
+  if (show) return arr;
+  return arr.length > 0 ? arr.map(() => ({ hidden: true })) : [];
+}
+function cardVisibility(p, isMe, isBanker, bankerHasSet) {
+  const seeAll      = isMe || isBanker || p.revealed;
+  const seeArranged = isBanker && bankerHasSet;
+  return {
+    hand:     vis(p.hand,     seeAll),
+    highHand: vis(p.highHand, seeAll || seeArranged),
+    lowHand:  vis(p.lowHand,  seeAll || seeArranged),
   };
 }
 
@@ -606,6 +625,9 @@ function safeState(room, forSocketId) {
     minBet: g.minBet || 0,
     maxBet: g.maxBet || 5,
     fixedBuyIn: g.fixedBuyIn || false,
+    totalBuyIns: g.totalBuyIns || 0,
+    pendingPoolTopUp: g.pendingPoolTopUp || false,
+    pendingPoolTopUpAmount: g.pendingPoolTopUpAmount || 0,
     dealOrderNum: g.dealOrderNum || null,
     players: g.players.map(p => {
       const isMe = p.id === forSocketId;
@@ -618,6 +640,7 @@ function safeState(room, forSocketId) {
         bonusBet: p.bonusBet,
         handSet: p.handSet,
         folded: p.folded,
+        playerReady: p.playerReady || false,
         result: p.result,
         netChips: p.netChips,
         bonusNet: p.bonusNet,
@@ -628,12 +651,12 @@ function safeState(room, forSocketId) {
         poolBlocked: p.poolBlocked || false,
         seatIndex: p.seatIndex !== undefined ? p.seatIndex : null,
         disconnected: p.disconnected || false,
+        addingChips: p.addingChips || false,
+        bonusPending: p.bonusPending || 0,
         stats: p.stats,
-        // Banker cards always visible; player cards visible to owner + after reveal
-        // During set phase: once banker has set, reveal their high/low arrangement to all
-        hand: (isMe || isBanker || p.revealed) ? p.hand : (p.hand.length > 0 ? p.hand.map(() => ({ hidden: true })) : []),
-        highHand: (isMe || isBanker || p.revealed || (isBanker && g.players[g.bankerIdx].handSet)) ? p.highHand : (p.highHand.length > 0 ? p.highHand.map(() => ({ hidden: true })) : []),
-        lowHand: (isMe || isBanker || p.revealed || (isBanker && g.players[g.bankerIdx].handSet)) ? p.lowHand : (p.lowHand.length > 0 ? p.lowHand.map(() => ({ hidden: true })) : []),
+        netPL: Math.round((p.chips - (p.stats.initialBuyIn + p.stats.buyins)) * 100) / 100,
+        // Card visibility delegated to cardVisibility() helper
+        ...cardVisibility(p, isMe, isBanker, g.players[g.bankerIdx].handSet),
       };
     }),
     sessionBestHand: g.sessionBestHand,
@@ -683,25 +706,41 @@ function settleRound(room) {
     else if (result === 'lose') p.stats.losses++;
     else                        p.stats.pushes++;
 
-    // Bonus bet — paid from bonusPool
+    // Bonus bet — Option B accounting:
+    // Stake was already deducted at deal time.
+    // Win: pool pays (stake + winnings) back to player. Net shown = winnings only.
+    // Loss: stake already gone from chips; add it to pool now for accounting.
     let bonusNet = 0, bonusLabel = '', bonusWon = false;
     if (p.bonusBet > 0 && p.hand.length === 7) {
       const sr = evalSevenCardBonus(p.hand);
       const payout = getBonusPayout(sr, g.bonusPayouts);
       if (payout) {
-        bonusNet = p.bonusBet * payout.mult;
-        bonusLabel = `${payout.label} (${payout.mult}×)`;
-        bonusWon = true;
-        // Ensure pool can cover; top up all players if needed
-        ensurePoolCovers(g, bonusNet);
-        g.bonusPool -= bonusNet;
-        p.chips += bonusNet;
+        // Stake was moved to pool at deal time.
+        // Win: pool pays back stake + winnings (mult × stake). Total out of pool = stake*(mult+1)
+        const winnings    = Math.round(p.bonusBet * payout.mult * 100) / 100;
+        const totalReturn = Math.round(p.bonusBet * (payout.mult + 1) * 100) / 100; // stake + winnings
+        bonusNet  = winnings; // net profit shown to player
+        bonusLabel = `${payout.label} (${payout.mult}×) +$${totalReturn.toFixed(2)}`;
+        bonusWon  = true;
+        if (!poolCanCover(g, totalReturn)) {
+          // Pool insufficient — flag for banker-controlled top-up, partial payout
+          g.pendingPoolTopUp = true;
+          g.pendingPoolTopUpAmount = Math.max(g.pendingPoolTopUpAmount,
+            Math.round((totalReturn - g.bonusPool) * 100) / 100);
+          const partial = Math.max(0, Math.round(g.bonusPool * 100) / 100);
+          g.bonusPool = 0;
+          p.chips = Math.round((p.chips + partial) * 100) / 100;
+          p.bonusPending = Math.round((totalReturn - partial) * 100) / 100;
+        } else {
+          g.bonusPool = Math.round((g.bonusPool - totalReturn) * 100) / 100;
+          p.chips     = Math.round((p.chips + totalReturn) * 100) / 100;
+        }
+        g.houseBonus.paid = Math.round((g.houseBonus.paid + winnings) * 100) / 100;
       } else {
-        bonusNet = -p.bonusBet;
+        bonusNet   = -p.bonusBet; // net shown as loss (stake already in pool from deal)
         bonusLabel = 'No bonus';
-        // Lost bonus bet flows into pool
-        g.bonusPool += p.bonusBet;
-        p.chips -= p.bonusBet;
+        // Stake is already in pool from deal-time deduction — no further action needed
+        g.houseBonus.collected = Math.round((g.houseBonus.collected + p.bonusBet) * 100) / 100;
       }
       g.houseBonus.rounds++;
     }
@@ -710,12 +749,12 @@ function settleRound(room) {
     p.bonusWon    = bonusWon;
   });
 
-  // Fix #1 — check if banker can cover net payout
+  // Check if banker can cover net payout
   const bankerOwes = bankerDelta; // chips banker must pay winners (may be negative if banker wins net)
   const wouldGoNeg = banker.chips - bankerOwes < 0;
 
   if (wouldGoNeg && bankerOwes > 0) {
-    // Banker insolvent — suspend chip transfers, flag for forced buy-in
+    // Banker cannot cover — suspend transfers, flag for mandatory buy-in
     g.bankerInsolvent = true;
     g.pendingBankerDelta = bankerOwes;
     // Do NOT move chips yet — players' netChips are set for display only
@@ -791,12 +830,29 @@ function collectPoolContributions(g) {
   });
 }
 
-// Ensure pool has enough to cover payout; top up if needed
-function ensurePoolCovers(g, amount) {
-  if (g.bonusPool >= amount) return;
-  collectPoolContributions(g);
-  // If still not enough after one top-up, pool just goes as negative as needed
-  // (edge case: small pool, huge royal flush payout)
+// Ensure pool has enough to cover payout.
+// Returns true if pool is sufficient, false if top-up is needed.
+// Caller must check and pause settlement if false.
+function poolCanCover(g, amount) {
+  return g.bonusPool >= amount;
+}
+
+// Charge a banker-set top-up amount from all active non-disconnected players
+// Returns true if all players could afford it, false if any were blocked
+function executePoolTopUp(g, amount, roomCode, io) {
+  g.players.forEach(p => {
+    if (p.disconnected) return;
+    if (p.chips >= amount) {
+      p.chips = Math.round((p.chips - amount) * 100) / 100;
+      g.bonusPool = Math.round((g.bonusPool + amount) * 100) / 100;
+    } else {
+      // Player can't afford — flag them
+      p.poolBlocked = true;
+      io.to(roomCode).emit('poolTopUpBlocked', { name: p.name, needed: amount, has: p.chips });
+    }
+  });
+  g.pendingPoolTopUp = false;
+  g.pendingPoolTopUpAmount = 0;
 }
 
 // ─── SOCKET EVENTS ───────────────────────────────────────────────────────────
@@ -858,32 +914,24 @@ io.on('connection', (socket) => {
     }
     if (g.players.length >= 7) { socket.emit('error', 'Room is full (max 7 players)'); return; }
 
-    // Late joiner: mark as sitting out this round
+    // Late joiner: sitting out if mid-hand (set/done phase)
     const sittingOut = g.phase !== 'lobby' && g.phase !== 'bet';
-    // Charge pool contribution for late joiners if game already started
-    let newChips = g.fixedBuyIn ? g.startingChips : g.startingChips;
+    let newChips = g.startingChips;
     let poolBlocked = false;
     if (g.phase !== 'lobby' && g.poolContribution > 0) {
       if (newChips >= g.poolContribution) {
-        newChips -= g.poolContribution;
-        g.bonusPool += g.poolContribution;
+        newChips     = r(newChips - g.poolContribution);
+        g.bonusPool  = r(g.bonusPool + g.poolContribution);
       } else {
         poolBlocked = true;
       }
     }
-    g.players.push({
-      id: socket.id, name,
-      chips: newChips, bet: 0, bonusBet: 0,
-      hand: [], highHand: [], lowHand: [],
-      handSet: false,
-      folded: sittingOut,
-      lateJoiner: sittingOut,
-      poolBlocked,
-      result: null, netChips: null, bonusNet: null, bonusLabel: '', bonusWon: false,
-      revealed: false,
-      seatIndex,
-      stats: { wins: 0, losses: 0, pushes: 0, rounds: 0, netChips: 0, buyins: 0 }
+    const newPlayer = makePlayer(socket.id, name, newChips, seatIndex, {
+      folded: sittingOut, playerReady: sittingOut, lateJoiner: sittingOut, poolBlocked
     });
+    g.players.push(newPlayer);
+    // Track chips entering the table
+    g.totalBuyIns = r(g.totalBuyIns + newChips + (poolBlocked ? 0 : (g.phase !== 'lobby' && g.poolContribution > 0 ? g.poolContribution : 0)));
     socket.join(code);
     socket.emit('joinedRoom', { code });
     broadcastState(code);
@@ -905,19 +953,26 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Fix #5 — collect initial bonus pool contributions from all players
-    // Players who can't afford contribution are auto-folded (blocked)
+    // Record initial buy-in for every player (for net P&L tracking)
+    g.players.forEach(p => {
+      p.stats.initialBuyIn = p.chips; // chips at game start before pool deduction
+    });
+
+    // Collect initial bonus pool contributions from ALL players including host
     if (g.poolContribution > 0) {
       g.players.forEach(p => {
         if (p.chips >= g.poolContribution) {
-          p.chips -= g.poolContribution;
-          g.bonusPool += g.poolContribution;
+          p.chips     = r(p.chips     - g.poolContribution);
+          g.bonusPool = r(g.bonusPool + g.poolContribution);
         } else {
-          // Can't afford — mark as needing buyin; they'll be blocked from betting
           p.poolBlocked = true;
         }
       });
     }
+
+    // Total chips on table = all player chips + pool (conservation baseline)
+    g.totalBuyIns = r(g.players.reduce((s, p) => s + p.chips, 0) + g.bonusPool);
+
     g.phase = 'bet';
     broadcastState(code);
   });
@@ -971,32 +1026,45 @@ io.on('connection', (socket) => {
     if (p) { p.bonusBet = 0; broadcastState(code); }
   });
 
-  socket.on('fold', ({ code }) => {
-    if (rateLimitBet(socket.id)) return;
+
+  // Player signals ready or sits out
+  socket.on('playerReady', ({ code, sitOut }) => {
     const g = rooms[code];
     if (!g || g.phase !== 'bet') return;
     const p = g.players.find(p => p.id === socket.id);
-    if (p) { p.folded = true; p.bet = 0; p.bonusBet = 0; broadcastState(code); }
+    if (!p) return;
+    const idx = g.players.indexOf(p);
+    if (idx === g.bankerIdx) return; // banker doesn't need to ready up
+    if (sitOut) {
+      p.folded = true;
+      p.bet = 0;
+      p.bonusBet = 0;
+    }
+    p.playerReady = true;
+    broadcastState(code);
   });
 
-  socket.on('unfold', ({ code }) => {
-    if (rateLimitBet(socket.id)) return;
+  // Player un-readies (Change Bet)
+  socket.on('playerUnready', ({ code }) => {
     const g = rooms[code];
     if (!g || g.phase !== 'bet') return;
     const p = g.players.find(p => p.id === socket.id);
-    // Cannot unfold if pool-blocked
-    if (p && p.chips > 0 && !p.poolBlocked) { p.folded = false; broadcastState(code); }
+    if (!p) return;
+    const idx = g.players.indexOf(p);
+    if (idx === g.bankerIdx) return;
+    p.playerReady = false;
+    p.folded = false; // un-sit-out when changing bet
+    broadcastState(code);
   });
 
   // Deal (current banker only)
   socket.on('deal', ({ code }) => {
     const g = rooms[code];
     if (!g || !isCurrentBanker(g, socket.id) || g.phase !== 'bet') return;
-    const nonBankers = g.players.filter((p, i) => i !== g.bankerIdx && !p.folded);
-    const bettors = nonBankers.filter(p => p.bet > 0);
-    if (bettors.length === 0) { socket.emit('error', 'At least one player must bet'); return; }
-    const missing = nonBankers.filter(p => p.bet === 0);
-    if (missing.length > 0) { socket.emit('error', `${missing.map(p => p.name).join(', ')} must bet or fold`); return; }
+    // Check at least one non-banker player is betting
+    const activePlayers = g.players.filter((p, i) => i !== g.bankerIdx && !p.disconnected);
+    const bettors = activePlayers.filter(p => p.bet > 0);
+    if (bettors.length === 0) { socket.emit('error', 'At least one player must place a bet'); return; }
 
     g.deck = shuffle(buildDeck());
     // Roll deal order number 1-7 (1=banker, 2=right of banker, clockwise)
@@ -1011,13 +1079,21 @@ io.on('connection', (socket) => {
     }
     g.players.forEach(p => {
       p.hand = []; p.highHand = []; p.lowHand = [];
-      p.handSet = false; p.result = null;
+      p.handSet = false; p.playerReady = false; p.result = null;
       p.netChips = null; p.bonusNet = null;
       p.bonusLabel = ''; p.bonusWon = false;
       p.revealed = false;
     });
     const active = g.players.filter((p, i) => i === g.bankerIdx || (!p.folded && p.bet > 0));
     active.forEach(p => { for (let i = 0; i < 7; i++) p.hand.push(g.deck.pop()); });
+    // Option B: deduct bonus bets from chips at deal time and hold in pool temporarily
+    // This keeps chips+pool constant (conservation invariant maintained)
+    active.forEach(p => {
+      if (p.bonusBet > 0) {
+        p.chips = Math.round((p.chips - p.bonusBet) * 100) / 100;
+        g.bonusPool = Math.round((g.bonusPool + p.bonusBet) * 100) / 100; // held in pool until settle
+      }
+    });
     g.phase = 'set';
     broadcastState(code);
   });
@@ -1080,12 +1156,13 @@ io.on('connection', (socket) => {
   socket.on('nextRound', ({ code }) => {
     const g = rooms[code];
     if (!g || !isCurrentBanker(g, socket.id) || g.phase !== 'done') return;
-    // Fix #1 — block Next Round while banker is insolvent
+    // Block Next Round while banker owes chips to winners
     if (g.bankerInsolvent) { socket.emit('error', 'Banker must buy in to cover pending payouts first'); return; }
     g.players.forEach(p => {
       p.bet = 0; p.bonusBet = 0;
       p.hand = []; p.highHand = []; p.lowHand = [];
       p.handSet = false; p.folded = false;
+      p.playerReady = false;
       p.lateJoiner = false;
       p.poolBlocked = false; // cleared each round — they'll be re-checked on next deal
       p.result = null; p.netChips = null;
@@ -1109,6 +1186,32 @@ io.on('connection', (socket) => {
     broadcastState(code);
   });
 
+  // Banker sets pool top-up amount and charges all players
+  socket.on('triggerPoolTopUp', ({ code, amount }) => {
+    const g = rooms[code];
+    if (!g || !isCurrentBanker(g, socket.id)) return;
+    const topUp = Math.round(parseFloat(amount) * 100) / 100;
+    if (topUp <= 0) return;
+    g.pendingPoolTopUpAmount = topUp;
+    // Notify all players of the top-up
+    io.to(code).emit('poolTopUpNotice', { amount: topUp, bankerName: g.players[g.bankerIdx].name });
+    executePoolTopUp(g, topUp, code, io);
+    // If pool can now cover any pending bonus payouts, resolve them
+    if (!g.pendingPoolTopUp) {
+      // resolve any bonusPending amounts
+      g.players.forEach(p => {
+        if (p.bonusPending > 0) {
+          if (poolCanCover(g, p.bonusPending)) {
+            g.bonusPool = Math.round((g.bonusPool - p.bonusPending) * 100) / 100;
+            p.chips = Math.round((p.chips + p.bonusPending) * 100) / 100;
+            p.bonusPending = 0;
+          }
+        }
+      });
+    }
+    broadcastState(code);
+  });
+
   // Rotate banker (current banker only, bet phase only)
   socket.on('rotateBanker', ({ code }) => {
     const g = rooms[code];
@@ -1117,18 +1220,24 @@ io.on('connection', (socket) => {
     broadcastState(code);
   });
 
-  // Buy in (Fix #4: cap 10000; Fix #1: resolve insolvency; Fix #5: unblock pool)
+  // Buy in — cap $500, notify table, track totalBuyIns, resolve insolvency/pool-block
   socket.on('buyIn', ({ code, amount }) => {
     const g = rooms[code];
     if (!g) return;
     const p = g.players.find(p => p.id === socket.id);
-    if (!p || amount < 1) return;
-    // Cap at 10,000
+    if (!p || amount < 0.01) return;
     const headroom = Math.max(0, 500 - p.chips);
-    const actual = Math.min(amount, headroom);
-    if (actual <= 0) { return; } // already at cap
-    p.chips += actual;
-    p.stats.buyins += actual;
+    const actual = Math.round(Math.min(amount, headroom) * 100) / 100;
+    if (actual <= 0) { socket.emit('error', 'You are already at the chip limit ($500)'); return; }
+    // Flag player as adding chips so table sees status
+    p.addingChips = true;
+    broadcastState(code);
+    p.chips = Math.round((p.chips + actual) * 100) / 100;
+    p.stats.buyins = Math.round((p.stats.buyins + actual) * 100) / 100;
+    g.totalBuyIns  = Math.round((g.totalBuyIns  + actual) * 100) / 100;
+    p.addingChips = false;
+    // Notify all players at table
+    io.to(code).emit('chipReload', { name: p.name, amount: actual, total: p.chips });
 
     // Unblock if previously pool-blocked and can now afford contribution
     if (p.poolBlocked && g.poolContribution > 0 && p.chips >= g.poolContribution) {
@@ -1137,7 +1246,7 @@ io.on('connection', (socket) => {
       p.poolBlocked = false;
     }
 
-    // Fix #1 — if banker bought in, check if insolvency can now be resolved
+    // If banker bought in, check if insolvency is now resolved
     const isBanker = g.players.indexOf(p) === g.bankerIdx;
     if (isBanker && g.bankerInsolvent && g.pendingBankerDelta > 0) {
       const banker = p;
@@ -1171,6 +1280,21 @@ io.on('connection', (socket) => {
       g.revealStep++;
     }
     broadcastState(code);
+  });
+
+  // Chat message
+  socket.on('chatMessage', ({ code, text }) => {
+    const g = rooms[code];
+    if (!g) return;
+    const p = g.players.find(p => p.id === socket.id);
+    if (!p) return;
+    const clean = String(text).trim().slice(0, 200);
+    if (!clean) return;
+    io.to(code).emit('chatMessage', {
+      name: p.name,
+      text: clean,
+      timestamp: Date.now()
+    });
   });
 
   // Disconnect
