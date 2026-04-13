@@ -867,6 +867,7 @@ io.on('connection', (socket) => {
     let code;
     do { code = makeCode(); } while (rooms[code]);
     rooms[code] = makeGame(socket.id, name, startingChips, bonusPayouts, Math.max(0, parseFloat(poolContribution)||0), parseFloat(minBet)||0, parseFloat(maxBet)||5, !!fixedBuyIn);
+    console.log(`[createRoom] code="${code}" host="${name}" socketId=${socket.id}`);
     socket.join(code);
     socket.emit('roomCreated', { code });
     broadcastState(code);
@@ -874,6 +875,7 @@ io.on('connection', (socket) => {
 
   // Request seat list — sent before joinRoom so player can pick a seat
   socket.on('requestSeats', ({ code }) => {
+    console.log(`[requestSeats] code="${code}" roomExists=${!!rooms[code]}`);
     const g = rooms[code];
     if (!g) { socket.emit('error', 'Room not found'); return; }
     const takenSeats = g.players
@@ -884,6 +886,7 @@ io.on('connection', (socket) => {
 
   // Join room with chosen seat (allowed at any phase — late joiners sit out current round)
   socket.on('joinRoom', ({ code, name, seatIndex }) => {
+    console.log(`[joinRoom] code="${code}" name="${name}" seatIndex=${seatIndex} roomExists=${!!rooms[code]} allRooms=${Object.keys(rooms).join(',')}`);
     const g = rooms[code];
     if (!g) { socket.emit('error', 'Room not found'); return; }
 
@@ -1308,6 +1311,7 @@ io.on('connection', (socket) => {
     for (const [code, g] of Object.entries(rooms)) {
       const idx = g.players.findIndex(p => p.id === socket.id);
       if (idx === -1) continue;
+      console.log(`[disconnect] socketId=${socket.id} player="${g.players[idx].name}" room="${code}" phase=${g.phase} playerCount=${g.players.length}`);
       io.to(code).emit('playerLeft', { name: g.players[idx].name });
       if (g.phase === 'lobby') {
         g.players.splice(idx, 1);
